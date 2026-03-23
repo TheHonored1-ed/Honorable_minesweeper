@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minesweeper Deluxe Hex</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  body { margin:0; font-family:Arial,sans-serif; text-align:center; }
+  #topbar { display:flex; justify-content:space-around; padding:10px; font-weight:bold; flex-wrap:wrap;}
+  #grid { display:grid; justify-content:center; touch-action: manipulation; gap:2px; }
+  .cell { width:40px; height:35px; display:flex; justify-content:center; align-items:center; font-weight:bold; cursor:pointer; user-select:none; transition: transform 0.1s, background 0.2s;}
+  .cell.revealed { transform: scale(0.95); }
+  .mine { background:red !important; }
+  .flag { background:yellow !important; }
+  /* Number colors */
+  .n1{color:#1976d2;} .n2{color:#388e3c;} .n3{color:#d32f2f;}
+  .n4{color:#7b1fa2;} .n5{color:#ff8f00;} .n6{color:#00838f;}
+  .n7{color:#5d4037;} .n8{color:#455a64;}
+  /* THEMES */
+  body.light{background:#eee; color:black;}
+  body.light .cell{background:#ccc;} body.light .revealed{background:#fff;}
+  body.dark{background:#222;color:white;} body.dark .cell{background:#555;} body.dark .revealed{background:#888;}
+  body.retro{background:#008080;} body.retro .cell{background:#c0c0c0;border:2px solid #fff;border-right-color:#808080;border-bottom-color:#808080;}
+  body.neon{background:#000;color:#0ff;} body.neon .cell{background:#111;border:1px solid #0ff;}
+  body.pastel{background:#fdf6f0;} body.pastel .cell{background:#ffd1dc;}
+  body.contrast{background:black;color:white;} body.contrast .cell{background:white;color:black;}
+  /* Hex grid adjustments */
+  .hex-row { display:flex; justify-content:center; }
+  .hex-cell { clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); }
+</style>
+</head>
+<body class="light">
+
+<h2>Minesweeper Deluxe Hex 💣</h2>
+
+<div id="topbar">
+  ⏱ <span id="timer">0</span> | 💣 <span id="mines">0</span> | 🏆 <span id="stats">0 / 0</span> | 💡 <span id="hints">3</span>
+</div>
+
+<div>
+  Difficulty:
+  <select id="difficulty">
+    <option value="easy">Easy</option>
+    <option value="medium" selected>Medium</option>
+    <option value="hard">Hard</option>
+  </select>
+  Theme:
+  <select id="theme" onchange="setTheme()">
+    <option value="light">Light</option>
+    <option value="dark">Dark</option>
+    <option value="retro">Retro</option>
+    <option value="neon">Neon</option>
+    <option value="pastel">Pastel</option>
+    <option value="contrast">High Contrast</option>
+  </select>
+  <button onclick="newGame()">New Game</button>
+  <button onclick="toggleMusic()">🎵 Music</button>
+  <button onclick="useHint()">Hint 💡</button>
+</div>
+
+<div id="grid"></div>
+
+<audio id="clickSound" src="https://freesound.org/data/previews/256/256113_3263906-lq.mp3"></audio>
+<audio id="flagSound" src="https://freesound.org/data/previews/64/64837_634166-lq.mp3"></audio>
+<audio id="explosionSound" src="https://freesound.org/data/previews/341/341695_3248244-lq.mp3"></audio>
+
+<script>
+let size, minesCount, grid=[], firstClick=true, gameOver=false;
+let timer=0, timerInterval, flagsPlaced=0, hints=3;
+let stats={wins:0, losses:0};
+let musicOn=false;
+
+// AUDIO
+const clickAudio=document.getElementById('clickSound');
+const flagAudio=document.getElementById('flagSound');
+const explosionAudio=document.getElementById('explosionSound');
+
+function toggleMusic(){ musicOn=!musicOn; if(musicOn) alert("Music would play here (placeholder)");}
+
+// --- Difficulty & Theme ---
+function setDifficulty(){ 
+  let d=document.getElementById('difficulty').value;
+  if(d==='easy'){size=6; minesCount=10;} 
+  else if(d==='medium'){size=8; minesCount=15;}
+  else{size=10; minesCount=25;}
+}
+function setTheme(){ document.body.className=document.getElementById('theme').value; saveGame(); }
+
+// --- Timer ---
+function startTimer(){timer=0; clearInterval(timerInterval); timerInterval=setInterval(()=>{timer++; document.getElementById('timer').textContent=timer;},1000);}
+function stopTimer(){clearInterval(timerInterval);}
+
+// --- Grid ---
+function initGrid(){
+  const container=document.getElementById('grid'); container.innerHTML=''; grid=[]; flagsPlaced=0;
+  for(let r=0;r<size;r++){
+    const rowDiv=document.createElement('div'); rowDiv.classList.add('hex-row');
+    for(let c=0;c<size;c++){
+      let i=r*size+c;
+      const cell=document.createElement('div'); cell.classList.add('cell','hex-cell'); cell.dataset.index=i;
+      cell.ontouchstart=e=>pressStart(e); cell.ontouchend=e=>pressEnd(e);
+      cell.onclick=e=>handleClick(e);
+      cell.oncontextmenu=e=>{e.preventDefault(); toggleFlag(i);};
+      rowDiv.appendChild(cell);
+      grid.push({mine:false,revealed:false,flagged:false,count:0,element:cell,row:r,col:c});
+    }
+    container.appendChild(rowDiv);
+  }
+  updateMineCounter();
+}
+
+// --- Mobile press ---
+let pressTimer;
+function pressStart(e){ pressTimer=setTimeout(()=>{toggleFlag(Number(e.target.dataset.index));},400);}
+function pressEnd(e){ clearTimeout(pressTimer); }
+
+// --- Logic ---
+function placeMines(safe){
+  const safeZone=new Set([safe,...getNeighbors(safe)]);
+  let placed=0;
+  while(placed<minesCount){
+    let i=Math.floor(Math.random()*grid.length);
+    if(!grid[i].mine && !safeZone.has(i)){grid[i].mine=true; placed++;}
+  }
+  calculateNumbers();
+}
+function getNeighbors(i){
+  const neighbors=[];
+  const r=grid[i].row,c=grid[i].col;
+  const dirs=[[0,1],[1,0],[0,-1],[-1,0],[-1,1],[1,-1]]; // Hex
+  dirs.forEach(d=>{let nr=r+d[0],nc=c+d[1]; if(nr>=0&&nr<size&&nc>=0&&nc<size) neighbors.push(nr*size+nc);});
+  return neighbors;
+}
+function calculateNumbers(){grid.forEach((c,i)=>{if(c.mine)return; c.count=getNeighbors(i).filter(n=>grid[n].mine).length;});}
+
+// --- Click / Flag ---
+function handleClick(e){
+  const i=Number(e.target.dataset.index); if(gameOver)return;
+  if(firstClick){placeMines(i); startTimer(); firstClick=false;}
+  const cell=grid[i]; if(cell.revealed&&cell.count>0){chord(i); return;}
+  reveal(i); checkWin(); playSound(clickAudio); saveGame();
+}
+function toggleFlag(i){
+  const c=grid[i]; if(c.revealed)return; c.flagged=!c.flagged; c.element.textContent=c.flagged?'🚩':''; flagsPlaced+=c.flagged?1:-1;
+  updateMineCounter(); playSound(flagAudio); saveGame();
+}
+function chord(i){
+  const c=grid[i]; const n=getNeighbors(i); const f=n.filter(x=>grid[x].flagged).length;
+  if(f===c.count){n.forEach(x=>{if(!grid[x].flagged) reveal(x);});}
+}
+function reveal(i){
+  const c=grid[i]; if(c.revealed||c.flagged)return; c.revealed=true; c.element.classList.add('revealed');
+  if(c.mine){c.element.textContent='💣'; playSound(explosionAudio); endGame(false); return;}
+  if(c.count){c.element.textContent=c.count; c.element.classList.add('n'+c.count);}
+  else getNeighbors(i).forEach(reveal);
+}
+function checkWin(){
+  if(grid.filter(c=>!c.mine).every(c=>c.revealed)){endGame(true);}
+}
+
+// --- Hints ---
+function useHint(){ if(hints<=0 || gameOver) return; let safe=grid.filter(c=>!c.mine&&!c.revealed); if(!safe.length)return; reveal(grid.indexOf(safe[Math.floor(Math.random()*safe.length)])); hints--; document.getElementById('hints').textContent=hints; }
+
+// --- Stats ---
+function endGame(win){gameOver=true; stopTimer(); grid.forEach(c=>{if(c.mine)c.element.textContent='💣';}); if(win) stats.wins++; else stats.losses++; updateStats(); localStorage.removeItem('msSave'); setTimeout(()=>alert(win?'You win! 🎉':'Game over 💀'),100); saveBestTime(); }
+function updateStats(){document.getElementById('stats').textContent=`${stats.wins} / ${stats.losses}`; localStorage.setItem('msStats',JSON.stringify(stats));}
+function saveBestTime(){let key='best_'+document.getElementById('difficulty').value; let best=localStorage.getItem(key); if(!best||timer<best){localStorage.setItem(key,timer); alert('New best time! 🏆');}}
+function loadStats(){let s=JSON.parse(localStorage.getItem('msStats')); if(s) stats=s; updateStats();}
+function updateMineCounter(){document.getElementById('mines').textContent=minesCount-flagsPlaced;}
+
+// --- Save / Load ---
+function saveGame(){const data={size,minesCount,grid:firstClick?[]:grid.map(c=>({mine:c.mine,revealed:c.revealed,flagged:c.flagged,count:c.count})),firstClick,flagsPlaced,timer,hints,theme:document.getElementById('theme').value,difficulty:document.getElementById('difficulty').value}; localStorage.setItem('msSave',JSON.stringify(data));}
+function loadGame(){let data=JSON.parse(localStorage.getItem('msSave')); if(!data)return false; size=data.size; minesCount=data.minesCount; firstClick=data.firstClick; flagsPlaced=data.flagsPlaced; timer=data.timer; hints=data.hints; document.getElementById('theme').value=data.theme; document.getElementById('difficulty').value=data.difficulty; setTheme(); initGrid(); if(!firstClick){data.grid.forEach((c,i)=>{Object.assign(grid[i],c); if(c.revealed){grid[i].element.classList.add('revealed'); if(c.mine) grid[i].element.textContent='💣'; else if(c.count){grid[i].element.textContent=c.count; grid[i].element.classList.add('n'+c.count);}} if(c.flagged){grid[i].element.classList.add('flag'); grid[i].element.textContent='🚩';}});} return true;}
+
+// --- Game Control ---
+function newGame(){localStorage.removeItem('msSave'); startGame();}
+function startGame(){setDifficulty(); firstClick=true; gameOver=false; hints=3; document.getElementById('hints').textContent=hints; stopTimer(); document.getElementById('timer').textContent=0; initGrid();}
+
+function playSound(audio){if(audio && !audio.paused) audio.currentTime=0; if(audio) audio.play();}
+
+// --- Init ---
+loadStats(); if(!loadGame()) startGame();
+</script>
+
+</body>
+</html>
